@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+
+while test $# -gt 0; do
+        case "$1" in
+                --help)
+                        echo "Script for creating virtual host. Example of usage: cvhost -h site1.local -c site1 -p /var/www"
+                        exit 0
+                        ;;
+                -h)
+                        shift
+                        vhostName="$1"
+                        shift
+                        ;;
+                -c)
+                        shift
+                        webServerVhostName="$1"
+                        shift
+                        ;;
+                -p)
+                        shift
+                        BaseDocumentRoot="$1"
+                        shift
+                        ;;
+                *)
+                        break
+                        ;;
+        esac
+done
+
+if [ -z "$vhostName" ]; then
+	echo "HostName is reqiered parameter"
+	exit 1
+fi
+if [ -z "$webServerVhostName" ]; then
+	webServerVhostName="$vhostName"
+fi
+if [ -z "$BaseDocumentRoot" ]; then
+	BaseDocumentRoot="/var/www"
+fi
+
+#define document root path for virtual host configuration file
+DocumentRoot="$BaseDocumentRoot/$webServerVhostName"
+
+#template for file configuration of web server Apache
+templateApacheConfig="<VirtualHost *:80>
+    ServerName $vhostName
+
+    ServerAdmin webmaster@localhost
+    DocumentRoot $DocumentRoot
+
+</VirtualHost>"
+
+#template for file configuration of web server Nginx
+templateNginxConfig="server {
+    listen 80;
+
+    root $DocumentRoot;
+    index index.html index.htm;
+
+    server_name $vhostName;
+}"
+
+#detecting web server type
+webServerName="$(netstat -ntlp | awk 'match($4,".*80$"){print $7}'|head -1|grep -Eo "apache2|nginx")"
+if [ "$webServerName" == "apache2" ]; then
+	webServerBaseDir="/etc/apache2"	
+	templateConfig="$templateApacheConfig"
+elif [ "$webServerName" == "nginx" ]; then
+	webServerBaseDir="/etc/nginx" 
+	templateConfig="$templateNginxConfig"
+else
+	echo "Couldn't determine web server. Exiting..."
+	exit 0;
+fi
+hostsFile="/etc/hosts"
+
+echo "Document root for virtual host(put your code here or change it in the configuration file of web server): $DocumentRoot"
+echo "Configuration file content is: 
+$templateConfig"
+
+isHostExistInTheHostsFile="$(grep -E "(\s|\t)*127\.0\.0\.1(\s|\t)*$vhostName(\s|\t|$)" "$hostsFile")"
+if [ -z "$isHostExistInTheHostsFile" ]; then
+    echo "Adding new host '$vhostName' to the hosts file..."
+    printf "\n127.0.0.1 $vhostName\n" >> $hostsFile
+else 
+    echo "Host '$vhostName' has already exist in the hosts file!"
+fi
+
+webServerSitesAvDir="$webServerBaseDir/sites-available"
+webServerSitesEnDir="$webServerBaseDir/sites-enabled"
+webServerVhostAvPath="$webServerSitesAvDir/$webServerVhostName.conf"
+webServerVhostEnPath="$webServerSitesEnDir/$webServerVhostName.conf"
+echo "creating configuration file $webServerVhostAvPath ..."
+echo "$templateConfig" > "$webServerVhostAvPath"
+echo "creating symbolic link from $webServerVhostAvPath to $webServerVhostEnPath ..."
+
+ln -s "$webServerVhostAvPath" "$webServerVhostEnPath"
+
+service "$webServerName" restart
